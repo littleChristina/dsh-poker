@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>德州扑克 · 局域网</title>
+<meta name="theme-color" content="#0e3527">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='0.9em' font-size='90'%3E%E2%99%A0%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div id="app" class="app">
+
+  <!-- ============ 大厅 ============ -->
+  <section id="screen-lobby" class="screen is-active">
+    <div class="lobby">
+      <header class="brand">
+        <div class="suits" aria-hidden="true">
+          <span>♠</span><span>♥</span><span>♦</span><span>♣</span>
+        </div>
+        <h1>德州扑克</h1>
+        <p class="tagline">局域网 · 朋友局</p>
+      </header>
+
+      <div class="panel">
+        <label class="field">
+          <span class="field-label">你的昵称</span>
+          <input id="nickname" class="input" type="text" maxlength="12"
+                 autocomplete="nickname" placeholder="例如：小明" />
+        </label>
+
+        <div class="tabs" role="tablist">
+          <button id="tab-create" class="tab is-active" data-tab="create" role="tab">创建房间</button>
+          <button id="tab-join" class="tab" data-tab="join" role="tab">加入房间</button>
+        </div>
+
+        <div class="tab-body" data-tab-body="create">
+          <p class="hint">开一桌，把房间码发给朋友，等他们进来。</p>
+          <button id="btn-create" class="btn primary block">创建房间</button>
+        </div>
+
+        <div class="tab-body" data-tab-body="join" hidden>
+          <label class="field">
+            <span class="field-label">房间码</span>
+            <input id="join-code" class="input code-input" type="text" maxlength="4"
+                   inputmode="text" autocomplete="off" placeholder="例如 7KQ2" />
+          </label>
+          <button id="btn-join" class="btn primary block">加入房间</button>
+        </div>
+
+        <p id="lobby-error" class="error" hidden></p>
+      </div>
+
+      <p class="invite-hint">
+        同一局域网的朋友，浏览器打开
+        <strong id="lan-addr">当前地址</strong>
+        就能进来
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ 房间 ============ -->
+  <section id="screen-room" class="screen" hidden>
+    <div class="room-wrap">
+      <header class="room-top">
+        <div class="room-code" id="room-code-box" title="点击复制邀请信息" role="button" tabindex="0">
+          <span class="room-code-label">房间码</span>
+          <strong id="room-code">----</strong>
+        </div>
+        <div class="room-meta">
+          <span id="conn-state" class="conn"><i class="dot"></i><span class="conn-text">连接中…</span></span>
+          <button id="btn-invite" class="btn ghost small">邀请</button>
+          <button id="btn-leave" class="btn ghost small">离开</button>
+        </div>
+      </header>
+
+      <main class="room-body">
+        <div id="waiting-panel" class="waiting-panel panel">
+          <div class="waiting-head">
+            <div>
+              <h2 id="room-title">等待玩家</h2>
+              <p id="room-rules" class="room-rules">盲注 10 / 20 · 初始 2,000 · 思考 30 秒</p>
+            </div>
+            <span id="room-count" class="room-count">0 / 8</span>
+          </div>
+
+          <ul id="player-list" class="player-list"></ul>
+
+          <div id="waiting-actions" class="waiting-actions">
+            <span id="ready-summary" class="ready-summary"></span>
+            <div class="waiting-buttons">
+              <button id="btn-settings" class="btn ghost" hidden>房间设置</button>
+              <button id="btn-ready" class="btn primary" hidden>准备</button>
+              <button id="btn-start" class="btn primary" hidden>开始游戏</button>
+            </div>
+          </div>
+
+          <div id="settings-panel" class="settings" hidden>
+            <h3 class="settings-title">房间设置</h3>
+            <div class="settings-grid">
+              <label class="field">
+                <span class="field-label">小盲</span>
+                <input id="cfg-small" class="input" type="number" min="1" step="1" />
+              </label>
+              <label class="field">
+                <span class="field-label">大盲</span>
+                <input id="cfg-big" class="input" type="number" min="2" step="1" />
+              </label>
+              <label class="field">
+                <span class="field-label">初始筹码</span>
+                <input id="cfg-chips" class="input" type="number" min="100" step="100" />
+              </label>
+              <label class="field">
+                <span class="field-label">思考时间（秒）</span>
+                <input id="cfg-timeout" class="input" type="number" min="5" max="120" step="5" />
+              </label>
+            </div>
+            <p class="settings-hint">大盲必须大于小盲；初始筹码至少为大盲的 10 倍。</p>
+            <div class="settings-actions">
+              <button id="btn-cancel-config" class="btn ghost" type="button">收起</button>
+              <button id="btn-save-config" class="btn primary" type="button">保存设置</button>
+            </div>
+            <p id="settings-error" class="error" hidden></p>
+          </div>
+
+          <p id="room-note" class="room-note">正在同步房间状态…</p>
+        </div>
+
+        <section id="table-panel" class="table-panel" hidden>
+          <div id="table-stage" class="table-stage">
+            <div class="felt" aria-hidden="true"></div>
+
+            <div class="table-center">
+              <div class="pot-line">底池 <strong id="table-pot">0</strong></div>
+              <div id="table-board" class="board"></div>
+              <div id="table-street" class="street">翻牌前</div>
+            </div>
+
+            <div id="table-seats" class="seats"></div>
+            <div id="hand-result" class="hand-result" hidden></div>
+          </div>
+
+          <div id="action-bar" class="action-bar" hidden>
+            <div class="action-line">
+              <span id="action-status" class="action-status">等待开始…</span>
+              <span class="action-timer" aria-hidden="true"><i id="action-timer-fill"></i></span>
+            </div>
+
+            <div id="action-buttons" class="action-buttons" hidden>
+              <button id="btn-fold" class="btn ghost" type="button">弃牌</button>
+              <button id="btn-check" class="btn ghost" type="button">过牌</button>
+              <button id="btn-call" class="btn primary" type="button">跟注</button>
+              <button id="btn-raise" class="btn gold-outline" type="button">加注</button>
+            </div>
+
+            <div id="raise-row" class="raise-row" hidden>
+              <input id="raise-slider" class="raise-slider" type="range" min="0" max="0" value="0" step="1" />
+              <span id="raise-value" class="raise-value">0</span>
+              <button id="btn-raise-cancel" class="btn ghost small" type="button">取消</button>
+              <button id="btn-raise-confirm" class="btn primary small" type="button">确认</button>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </section>
+
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>
