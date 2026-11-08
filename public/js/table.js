@@ -7,6 +7,9 @@ import { store } from './store.js';
 
 const STREET_LABELS = { preflop: '翻牌前', flop: '翻牌', turn: '转牌', river: '河牌' };
 const SEAT_COUNT = 8;
+const CHIPS_UNIT_KEY = 'dsh-poker.chipsUnit';
+// 一手结束后共展示 9 秒（服务器 NEXT_HAND_DELAY）：先让桌面亮 5 秒，再用结算面板 4 秒
+const RESULT_OVERLAY_MS = 4000;
 
 const els = {
   panel: $('#table-panel'),
@@ -15,6 +18,10 @@ const els = {
   board: $('#table-board'),
   pot: $('#table-pot'),
   street: $('#table-street'),
+  handno: $('#table-handno'),
+  level: $('#table-level'),
+  blindProgress: $('#table-blind-progress'),
+  chipsUnit: $('#btn-chips-unit'),
   result: $('#hand-result'),
   bar: $('#action-bar'),
   status: $('#action-status'),
@@ -35,17 +42,55 @@ const seatNodes = new Map(); // playerId -> { root, cards, avatar, bet, name, ch
 
 let last = null;
 let receivedAt = 0;
+let clockOffset = 0; // 服务器时间 - 本地时间，用于盲注升级倒计时
 let heroSeat = 0;
 let submitting = false;
 let ticker = null;
 let resultTimerEl = null;
 let bestByWinner = new Map(); // 每位赢家自己的最佳五张（用于高亮其底牌）
 let boardBest = new Set(); // 公共牌中参与赢家组合的牌
+let chipsUnit = loadChipsUnit(); // 'chips' 数值 | 'bb' 大盲倍数（只影响自己的筹码显示）
 
 // ---------- 小工具 ----------
 
 function fmt(n) {
   return Number(n || 0).toLocaleString('zh-CN');
+}
+
+function loadChipsUnit() {
+  try {
+    return localStorage.getItem(CHIPS_UNIT_KEY) === 'bb' ? 'bb' : 'chips';
+  } catch (err) {
+    return 'chips';
+  }
+}
+
+function saveChipsUnit() {
+  try {
+    localStorage.setItem(CHIPS_UNIT_KEY, chipsUnit);
+  } catch (err) {
+    // 隐私模式下写不进去，忽略即可
+  }
+}
+
+function chipUnitLabel() {
+  return chipsUnit === 'bb' ? '筹码：BB' : '筹码：数值';
+}
+
+// 牌桌上的筹码/下注/底池：数值，或以当前大盲为 1 BB 的倍数（保留两位小数）
+function fmtChips(chips, state, compact = false) {
+  const bigBlind = (state.blinds && state.blinds.bigBlind) || 0;
+  if (chipsUnit !== 'bb' || bigBlind <= 0) return fmt(chips);
+  const value = (Number(chips || 0) / bigBlind).toFixed(2);
+  return compact ? `${value}BB` : `${value} BB`;
+}
+
+// 服务器给的动作文案里带着筹码数字（如「加注到 300」），BB 模式下一起换算
+function fmtActionText(text, state) {
+  if (!text || chipsUnit !== 'bb') return text || '';
+  const bigBlind = (state.blinds && state.blinds.bigBlind) || 0;
+  if (bigBlind <= 0) return text;
+  return String(text).replace(/\d+/g, (digits) => (Number(digits) / bigBlind).toFixed(2));
 }
 
 function rule(text, extra = '') {
@@ -73,6 +118,12 @@ export function initTable() {
   els.raiseConfirm.addEventListener('click', confirmRaise);
   els.slider.addEventListener('input', updateRaiseLabel);
 
+  els.chipsUnit.addEventListener('click', () => {
+    chipsUnit = chipsUnit === 'bb' ? 'chips' : 'bb';
+    saveChipsUnit();
+    if (last) renderTable(last);
+  });
+
   if (!ticker) ticker = setInterval(tick, 250);
 }
 
@@ -81,16 +132,54 @@ export function initTable() {
 export function renderTable(state) {
   last = state;
   receivedAt = Date.now();
+  clockOffset = (state.serverTime || Date.now()) - Date.now();
   heroSeat = state.you ? state.you.seat : 0;
 
   const winning = winningCards(state);
   bestByWinner = winning.byWinner;
   boardBest = winning.board;
+  renderTopbar(state);
   renderSeats(state);
   renderCenter(state);
   renderActionBar(state);
   renderResult(state);
   tick();
+}
+
+function renderTopbar(state) {
+  const blinds = state.blinds || {};
+  const bu = state.blindUp || {};
+  const level = blinds.level || 1;
+  els.handno.textContent = `第 ${state.handNo || 1} 手`;
+  els.level.textContent = `盲注 ${fmt(blinds.smallBlind)} / ${fmt(blinds.bigBlind)}${level > 1 ? `（第 ${level} 级）` : ''}`;
+  els.blindProgress.textContent = blindProgressText(state);
+  els.blindProgress.classList.toggle('is-muted', !bu.mode || bu.mode === 'off');
+  els.chipsUnit.textContent = chipUnitLabel();
+  els.chipsUnit.setAttribute('aria-pressed', chipsUnit === 'bb' ? 'true' : 'false');
+}
+
+function blindProgressText(state) {
+  const bu = state.blindUp || {};
+  const next = state.nextBlinds || {};
+  const level = (state.blinds && state.blinds.level) || 1;
+
+  if (!bu.mode || bu.mode === 'off') return '固定盲注，不升盲';
+
+  if (bu.mode === 'hands') {
+    const until = bu.handsUntilUpgrade != null ? bu.handsUntilUpgrade : '—';
+    return `第 ${level} 级 · 再 ${until} 手升到 ${fmt(next.smallBlind)} / ${fmt(next.bigBlind)}`;
+  }
+
+  // time 模式：升级倒计时（服务器时间）
+  const remain = Math.max(0, (bu.levelEndsAt || 0) - (Date.now() + clockOffset));
+  return `第 ${level} 级 · ${mmss(remain)} 后升到 ${fmt(next.smallBlind)} / ${fmt(next.bigBlind)}`;
+}
+
+function mmss(ms) {
+  const sec = Math.max(0, Math.ceil(ms / 1000));
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
 function renderSeats(state) {
@@ -147,12 +236,12 @@ function updateSeat(node, p, state) {
   node.avatar.textContent = initialOf(p.name);
   node.avatar.className = `seat-avatar ${avatarTint(p.name)}`;
   node.name.textContent = p.isYou ? `${p.name}（你）` : p.name;
-  node.chips.textContent = fmt(p.chips);
-  node.action.textContent = p.lastAction || '';
+  node.chips.textContent = fmtChips(p.chips, state);
+  node.action.textContent = fmtActionText(p.lastAction, state);
 
   if (p.bet > 0) {
     node.bet.hidden = false;
-    node.bet.textContent = fmt(p.bet);
+    node.bet.textContent = fmtChips(p.bet, state, true);
   } else {
     node.bet.hidden = true;
     node.bet.textContent = '';
@@ -175,12 +264,12 @@ function updateSeat(node, p, state) {
   if (p.isSmallBlind) node.tags.append(rule('SB'));
   if (p.isBigBlind) node.tags.append(rule('BB'));
   if (p.handName) node.tags.append(rule(p.handName));
-  if (p.won > 0) node.tags.append(rule(`+${fmt(p.won)}`, 'win'));
+  if (p.won > 0) node.tags.append(rule(`+${fmtChips(p.won, state, true)}`, 'win'));
   node.tags.hidden = node.tags.childElementCount === 0;
 }
 
 function renderCenter(state) {
-  els.pot.textContent = fmt(state.pot);
+  els.pot.textContent = fmtChips(state.pot, state);
   els.street.textContent = streetLabel(state);
 
   els.board.innerHTML = '';
@@ -263,13 +352,15 @@ function renderActionBar(state) {
   els.call.hidden = !(legal.call > 0);
   if (legal.call > 0) {
     const allInCall = me.chips > 0 && legal.call >= me.chips;
-    els.call.textContent = allInCall ? `跟注全下 ${fmt(legal.call)}` : `跟注 ${fmt(legal.call)}`;
+    els.call.textContent = allInCall
+      ? `跟注全下 ${fmtChips(legal.call, state)}`
+      : `跟注 ${fmtChips(legal.call, state)}`;
   }
 
   els.raise.hidden = !legal.raise;
   if (legal.raise) {
     const r = legal.raise;
-    els.raise.textContent = r.allInOnly ? `全下 ${fmt(r.max)}` : '加注';
+    els.raise.textContent = r.allInOnly ? `全下 ${fmtChips(r.max, state)}` : '加注';
     els.raise.dataset.min = String(r.min);
     els.raise.dataset.max = String(r.max);
   }
@@ -307,7 +398,7 @@ function updateRaiseLabel() {
   if (!legal || !legal.raise) return;
   const { min, max } = legal.raise;
   const value = Math.max(min, Math.min(max, Math.round(Number(els.slider.value))));
-  const text = value >= max ? `全下 ${fmt(max)}` : `加注到 ${fmt(value)}`;
+  const text = value >= max ? `全下 ${fmtChips(max, last)}` : `加注到 ${fmtChips(value, last)}`;
   els.raiseValue.textContent = text;
   els.raiseConfirm.textContent = text;
 }
@@ -365,22 +456,55 @@ function tick() {
     els.timerFill.style.width = '0%';
   }
 
-  if (last.phase === 'handover' && last.nextHandIn != null && resultTimerEl) {
-    const remain = Math.max(0, last.nextHandIn - (Date.now() - receivedAt));
-    resultTimerEl.textContent = `下一手 ${Math.ceil(remain / 1000)} 秒后开始`;
+  if (last.phase === 'handover') {
+    syncResultVisibility();
+    if (resultTimerEl && last.nextHandIn != null) {
+      const remain = Math.max(0, last.nextHandIn - (Date.now() - receivedAt));
+      resultTimerEl.textContent = `下一手 ${Math.ceil(remain / 1000)} 秒后开始`;
+    }
+  } else {
+    closeResult();
+  }
+
+  if (last.blindUp && last.blindUp.mode === 'time' && last.blindUp.levelEndsAt) {
+    els.blindProgress.textContent = blindProgressText(last);
   }
 }
 
 // ---------- 结算展示 ----------
+// 本手刚结束时先不弹面板：让牌桌和高亮的获胜牌露 5 秒，最后 4 秒再显示结算面板。
 
 function renderResult(state) {
-  const result = state.result;
-  const open = state.phase === 'handover' && !!result;
-  els.result.hidden = !open;
-  els.result.innerHTML = '';
-  resultTimerEl = null;
-  if (!open) return;
+  if (!(state.phase === 'handover' && state.result)) {
+    closeResult();
+    return;
+  }
+  syncResultVisibility();
+}
 
+function closeResult() {
+  if (!els.result.hidden) els.result.hidden = true;
+  if (els.result.childElementCount) els.result.innerHTML = '';
+  resultTimerEl = null;
+}
+
+function resultShouldOpen() {
+  if (!last || last.phase !== 'handover' || !last.result) return false;
+  const remain = last.nextHandIn != null ? last.nextHandIn - (Date.now() - receivedAt) : 0;
+  return remain <= RESULT_OVERLAY_MS;
+}
+
+function syncResultVisibility() {
+  if (!resultShouldOpen()) {
+    closeResult();
+    return;
+  }
+  if (!els.result.childElementCount) buildResult(last);
+  els.result.hidden = false;
+}
+
+function buildResult(state) {
+  const result = state.result;
   const box = el('div', { className: 'result-card' });
   const showdown = result.reason !== 'fold';
   const pots = result.pots || [];
@@ -420,9 +544,9 @@ function renderResult(state) {
     if (reveal && reveal.handName) {
       row.append(el('span', { className: 'result-hand', textContent: reveal.handName }));
     }
-    row.append(el('span', { className: 'result-amount', textContent: `+${fmt(gain)}` }));
+    row.append(el('span', { className: 'result-amount', textContent: `+${fmtChips(gain, state)}` }));
     if (refund > 0) {
-      row.append(el('span', { className: 'result-refund', textContent: `退回 ${fmt(refund)}` }));
+      row.append(el('span', { className: 'result-refund', textContent: `退回 ${fmtChips(refund, state)}` }));
     }
 
     if (reveal && Array.isArray(reveal.bestCards) && reveal.bestCards.length === 5) {
@@ -441,7 +565,7 @@ function renderResult(state) {
     const gain = (result.winnings || {})[id] || 0;
     if (gain - refund > 0) continue; // 已经在赢家行里显示
     list.append(
-      el('p', { className: 'result-refund-row', textContent: `${p.name} 退回未跟注的 ${fmt(refund)}` })
+      el('p', { className: 'result-refund-row', textContent: `${p.name} 退回未跟注的 ${fmtChips(refund, state)}` })
     );
   }
 
@@ -462,10 +586,17 @@ function renderResult(state) {
   }
 
   const foot = el('p', { className: 'result-foot' });
+  if (state.nextBlinds) {
+    foot.append(
+      el('span', {
+        className: 'result-next-blind',
+        textContent: `下一手盲注 ${fmt(state.nextBlinds.smallBlind)} / ${fmt(state.nextBlinds.bigBlind)}`,
+      })
+    );
+  }
   resultTimerEl = el('span', { className: 'result-timer', textContent: '下一手即将开始' });
   foot.append(resultTimerEl);
   box.append(foot);
 
   els.result.append(box);
-  tick();
 }

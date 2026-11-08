@@ -587,6 +587,36 @@ button, input {
 
 .settings .error { margin-top: 10px; }
 
+.settings-sub {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+
+.settings-subtitle {
+  margin: 0 0 10px;
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: var(--ink-dim);
+  font-weight: 600;
+}
+
+.select {
+  color-scheme: dark;
+  width: 100%;
+}
+
+.blind-preview {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line);
+  color: var(--ink-dim);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
 .room-note {
   margin: 14px 0 0;
   color: var(--ink-faint);
@@ -647,6 +677,47 @@ button, input {
   flex-direction: column;
   gap: 10px;
   width: 100%;
+}
+
+.table-topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  max-width: 940px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 0 4px;
+  font-size: 13px;
+}
+
+.table-meta {
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.btn.topbar-toggle {
+  margin-left: auto;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  line-height: 1.2;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+#table-handno {
+  color: var(--gold-bright);
+}
+
+.table-blind-progress {
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.table-blind-progress.is-muted {
+  opacity: 0.7;
 }
 
 .table-stage {
@@ -782,6 +853,7 @@ button, input {
   background: var(--gold);
   border: 1px solid rgba(0, 0, 0, 0.3);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .seat-name {
@@ -837,8 +909,12 @@ button, input {
 .seat-action {
   min-height: 15px;
   margin-top: 1px;
+  max-width: 150px;
   font-size: 11px;
   color: var(--ink-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .seat.is-turn .seat-action { color: var(--gold-bright); }
@@ -893,7 +969,7 @@ button, input {
 }
 
 .card.best {
-  box-shadow: 0 0 0 2px var(--gold-bright), 0 3px 10px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 0 0 3px var(--gold-bright), 0 0 14px rgba(240, 209, 141, 0.55), 0 3px 10px rgba(0, 0, 0, 0.4);
 }
 
 .seat.is-hero .seat-cards .card { width: 52px; height: 74px; }
@@ -1097,6 +1173,15 @@ button, input {
   margin: 12px 0 0;
   font-size: 12px;
   color: var(--ink-dim);
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.result-next-blind {
+  color: var(--gold-bright);
+  font-variant-numeric: tabular-nums;
 }
 
 /* display:flex 的容器需要显式尊重 hidden 属性 */

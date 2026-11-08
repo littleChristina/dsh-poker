@@ -43,6 +43,13 @@ const els = {
   cfgBig: $('#cfg-big'),
   cfgChips: $('#cfg-chips'),
   cfgTimeout: $('#cfg-timeout'),
+  cfgBlindMode: $('#cfg-blind-mode'),
+  cfgBlindHands: $('#cfg-blind-hands'),
+  cfgBlindMinutes: $('#cfg-blind-minutes'),
+  cfgBlindFactor: $('#cfg-blind-factor'),
+  cfgHandsField: $('#cfg-hands-field'),
+  cfgMinutesField: $('#cfg-minutes-field'),
+  blindPreview: $('#blind-preview'),
   btnSaveConfig: $('#btn-save-config'),
   btnCancelConfig: $('#btn-cancel-config'),
   settingsError: $('#settings-error'),
@@ -246,6 +253,44 @@ async function startGame() {
   }
 }
 
+function roundTo5(n) {
+  return Math.max(5, Math.round(n / 5) * 5);
+}
+
+// 与服务器一致的下一级盲注（预览用，第 1 级始终是设置的原始大小盲）
+function nextBlindPair(smallBlind, factor) {
+  const sb = Math.max(smallBlind + 1, roundTo5(smallBlind * factor));
+  return { sb, bb: Math.min(200000, sb * 2) };
+}
+
+function syncBlindFields() {
+  const mode = els.cfgBlindMode.value;
+  els.cfgHandsField.hidden = mode !== 'hands';
+  els.cfgMinutesField.hidden = mode !== 'time';
+  updateBlindPreview();
+}
+
+function updateBlindPreview() {
+  if (!els.blindPreview) return;
+  const mode = els.cfgBlindMode.value;
+  const small = Math.max(1, Number(els.cfgSmall.value) || 10);
+  const factor = Number(els.cfgBlindFactor.value) || 1.5;
+  const every =
+    Number(mode === 'hands' ? els.cfgBlindHands.value : els.cfgBlindMinutes.value) || 10;
+
+  if (mode === 'off') {
+    els.blindPreview.textContent = `整局盲注保持 ${small} / ${small * 2}，不升盲。`;
+    return;
+  }
+
+  const lv2 = nextBlindPair(small, factor);
+  const lv3 = nextBlindPair(lv2.sb, factor);
+  const unit = mode === 'hands' ? '手' : '分钟';
+  els.blindPreview.textContent =
+    `每 ${every} ${unit}升一级（×${factor}）：第 ${every + 1} ${unit}起 ${lv2.sb} / ${lv2.bb}，` +
+    `第 ${every * 2 + 1} ${unit}起 ${lv3.sb} / ${lv3.bb}…`;
+}
+
 function openSettings() {
   if (!snapshot) return;
   const cfg = snapshot.config || {};
@@ -253,8 +298,13 @@ function openSettings() {
   els.cfgBig.value = cfg.bigBlind;
   els.cfgChips.value = cfg.startingChips;
   els.cfgTimeout.value = cfg.actionTimeout;
+  els.cfgBlindMode.value = cfg.blindUpMode || 'off';
+  els.cfgBlindHands.value = cfg.blindUpEveryHands || 10;
+  els.cfgBlindMinutes.value = cfg.blindUpEveryMinutes || 10;
+  els.cfgBlindFactor.value = String(cfg.blindFactor || 1.5);
   els.settingsError.hidden = true;
   els.settingsPanel.hidden = false;
+  syncBlindFields();
 }
 
 async function saveConfig() {
@@ -265,6 +315,10 @@ async function saveConfig() {
     bigBlind: Number(els.cfgBig.value),
     startingChips: Number(els.cfgChips.value),
     actionTimeout: Number(els.cfgTimeout.value),
+    blindUpMode: els.cfgBlindMode.value,
+    blindUpEveryHands: Number(els.cfgBlindHands.value),
+    blindUpEveryMinutes: Number(els.cfgBlindMinutes.value),
+    blindFactor: Number(els.cfgBlindFactor.value),
   };
   els.btnSaveConfig.disabled = true;
   try {
@@ -305,7 +359,12 @@ function renderRoom(state) {
   els.roomCount.textContent = `${players.length} / 8`;
 
   const cfg = state.config || {};
-  let rules = `盲注 ${cfg.smallBlind} / ${cfg.bigBlind} · 初始 ${fmtNumber(cfg.startingChips)} · 思考 ${cfg.actionTimeout} 秒`;
+  const blinds = state.blinds || { level: 1, smallBlind: cfg.smallBlind, bigBlind: cfg.bigBlind };
+  let rules = `盲注 ${blinds.smallBlind} / ${blinds.bigBlind}`;
+  if (blinds.level > 1) rules += `（第 ${blinds.level} 级）`;
+  rules += ` · 初始 ${fmtNumber(cfg.startingChips)} · 思考 ${cfg.actionTimeout} 秒`;
+  if (cfg.blindUpMode === 'hands') rules += ` · 每 ${cfg.blindUpEveryHands} 手升盲`;
+  else if (cfg.blindUpMode === 'time') rules += ` · 每 ${cfg.blindUpEveryMinutes} 分钟升盲`;
   if (state.phase === 'playing' || state.phase === 'handover') rules += ` · 第 ${state.handNo} 手`;
   els.roomRules.textContent = rules;
 
@@ -462,6 +521,12 @@ function bind() {
     els.settingsPanel.hidden = true;
   });
   els.btnSaveConfig.addEventListener('click', saveConfig);
+
+  els.cfgBlindMode.addEventListener('change', syncBlindFields);
+  els.cfgBlindFactor.addEventListener('change', updateBlindPreview);
+  for (const node of [els.cfgSmall, els.cfgBlindHands, els.cfgBlindMinutes]) {
+    node.addEventListener('input', updateBlindPreview);
+  }
 }
 
 async function tryRejoin(token) {

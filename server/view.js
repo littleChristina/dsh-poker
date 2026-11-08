@@ -4,7 +4,7 @@ const { SEATS } = require('./game/hand');
 
 // 生成某个玩家视角的房间状态快照（底牌只给本人或摊牌时公开）
 function publicState(room, playerId) {
-  const now = Date.now();
+  const now = typeof room.now === 'function' ? room.now() : Date.now();
   const hand = room.hand;
   const handPlayers = new Map(hand ? hand.players.map((p) => [p.id, p]) : []);
   const result = room.result;
@@ -59,12 +59,43 @@ function publicState(room, playerId) {
     legal = hand.legalFor(playerId);
   }
 
+  // 升盲：当前生效级别 + 下一手将生效的盲注 + 升级进度
+  const blindUpMode = room.config.blindUpMode;
+  const levelNow = room._currentLevel(now);
+  const nextLevel = Math.max(room.blindLevel + 1, levelNow);
+  const nextB = room._levelBlinds(nextLevel);
+  const everyMs = room.config.blindUpEveryMinutes * 60 * 1000;
+  const handsUntilUpgrade =
+    blindUpMode === 'hands'
+      ? Math.max(1, room.config.blindUpEveryHands - (room.completedHands % room.config.blindUpEveryHands))
+      : null;
+  const levelEndsAt =
+    blindUpMode === 'time' && room.gameStartedAt ? room.gameStartedAt + levelNow * everyMs : null;
+
   return {
     serverTime: now,
     code: room.code,
     phase: room.phase,
     hostId: room.hostId,
     config: room.config,
+    blinds: {
+      level: room.blindLevel,
+      smallBlind: room.currentBlinds.smallBlind,
+      bigBlind: room.currentBlinds.bigBlind,
+    },
+    nextBlinds: {
+      level: nextLevel,
+      smallBlind: nextB.smallBlind,
+      bigBlind: nextB.bigBlind,
+    },
+    blindUp: {
+      mode: blindUpMode,
+      everyHands: room.config.blindUpEveryHands,
+      everyMinutes: room.config.blindUpEveryMinutes,
+      factor: room.config.blindFactor,
+      handsUntilUpgrade,
+      levelEndsAt,
+    },
     handNo: room.handNo,
     street: hand ? hand.street : null,
     board: hand ? hand.board.slice() : result ? result.board.slice() : [],

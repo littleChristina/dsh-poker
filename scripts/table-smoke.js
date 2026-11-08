@@ -1,6 +1,6 @@
 'use strict';
 
-// 牌桌 / 行动条冒烟：两个 AI 玩家自动打一手牌，检查结算数据与底牌可见性
+// 牌桌 / 行动条冒烟：两个 AI 玩家自动打牌，检查结算数据、底牌可见性、自动下一手与升盲
 // 用法：先启动服务，再运行 node scripts/table-smoke.js
 const BASE = process.env.BASE || 'http://localhost:3000';
 
@@ -148,6 +148,52 @@ function chipsSum(state) {
     ok(ended.phase === 'handover' && ended.result.reason === 'fold', '弃牌结束，result.reason = fold');
     ok(chipsSum(ended) === 4000, `弃牌后筹码守恒（${chipsSum(ended)} / 4000）`);
   }
+
+  console.log('升盲冒烟：按手数升盲');
+  const host2 = await post('/api/create', { name: '升盲甲' });
+  const guest2 = await post('/api/join', { code: host2.data.code, name: '升盲乙' });
+  const t2 = [host2.data.token, guest2.data.token];
+
+  await post('/api/ready', { token: guest2.data.token, ready: true });
+  const cfgRes = await post('/api/config', {
+    token: host2.data.token,
+    config: { blindUpMode: 'hands', blindUpEveryHands: 1, blindFactor: 1.5 },
+  });
+  ok(cfgRes.status === 200, '设置「每手升盲」，倍率 1.5');
+  await post('/api/start', { token: host2.data.token });
+
+  const s0 = await stateOf(host2.data.token);
+  ok(s0.blinds.level === 1 && s0.blinds.smallBlind === 10, '第 1 手盲注 10 / 20');
+  ok(s0.nextBlinds.smallBlind === 15 && s0.nextBlinds.bigBlind === 30, '预告下一手 15 / 30');
+  ok(s0.blindUp.mode === 'hands' && s0.blindUp.handsUntilUpgrade === 1, '升盲进度：再 1 手升级');
+
+  const done1 = await playHand(t2);
+  ok(done1.phase === 'handover', '升盲房第 1 手结束');
+
+  let second = null;
+  const secondStart = Date.now();
+  while (Date.now() - secondStart < 15000) {
+    const s = await stateOf(host2.data.token);
+    if (s && s.phase === 'playing' && s.handNo === done1.handNo + 1) {
+      second = s;
+      break;
+    }
+    await sleep(200);
+  }
+  ok(!!second, '第 2 手自动开始');
+
+  if (second) {
+    ok(second.blinds.level === 2 && second.blinds.smallBlind === 15, '第 2 手盲注升到 15 / 30');
+    const sb = second.players.find((p) => p.isSmallBlind);
+    ok(!!sb && sb.bet === 15, `小盲实际下了 15（实际 ${sb ? sb.bet : '—'}）`);
+  }
+
+  // 收尾：当前行动者弃牌结束这手，然后离开
+  const turn2 = await waitForTurn(t2);
+  await post('/api/action', { token: turn2.token, action: 'fold' });
+  await playHand(t2);
+  await post('/api/leave', { token: guest2.data.token });
+  await post('/api/leave', { token: host2.data.token });
 
   console.log('清理');
   await post('/api/leave', { token: tb });

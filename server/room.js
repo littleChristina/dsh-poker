@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { Hand, SEATS } = require('./game/hand');
+const { blindsForLevel, levelForHands, levelForTime, validateBlindConfig } = require('./game/blinds');
 const logger = require('./util/logger');
 
 const DEFAULT_CONFIG = {
@@ -9,6 +10,10 @@ const DEFAULT_CONFIG = {
   bigBlind: 20,
   startingChips: 2000,
   actionTimeout: 30,
+  blindUpMode: 'off', // off | hands | time
+  blindUpEveryHands: 10,
+  blindUpEveryMinutes: 10,
+  blindFactor: 1.5,
 };
 
 const NEXT_HAND_DELAY = 9000; // 结算展示（赢家最佳五张）时长
@@ -23,9 +28,13 @@ function randomToken() {
 }
 
 class Room {
-  constructor(code, hub) {
+  constructor(code, hub, opts = {}) {
     this.code = code;
     this.hub = hub;
+    // 可注入时钟，方便测试时间升盲（默认真实时间）
+    this.now = typeof opts.now === 'function' ? opts.now : () => Date.now();
+    // 测试用：缩短发牌动画等待
+    this._dealDelay = typeof opts.dealDelay === 'number' ? opts.dealDelay : undefined;
     this.createdAt = Date.now();
     this.hostId = null;
     this.config = { ...DEFAULT_CONFIG };
@@ -40,6 +49,14 @@ class Room {
     this.nextHandAt = null;
     this._nextTimer = null;
     this.lastActivity = Date.now();
+    // 升盲状态
+    this.gameStartedAt = null;
+    this.completedHands = 0;
+    this.blindLevel = 1;
+    this.currentBlinds = {
+      smallBlind: this.config.smallBlind,
+      bigBlind: this.config.bigBlind,
+    };
   }
 
   // ---------- 玩家管理 ----------
@@ -122,6 +139,23 @@ class Room {
     if (cfg.bigBlind != null) next.bigBlind = num(cfg.bigBlind, 2, 200000, '大盲');
     if (cfg.startingChips != null) next.startingChips = num(cfg.startingChips, 100, 1000000, '初始筹码');
     if (cfg.actionTimeout != null) next.actionTimeout = num(cfg.actionTimeout, 5, 120, '思考时间');
+    if (
+      cfg.blindUpMode != null ||
+      cfg.blindUpEveryHands != null ||
+      cfg.blindUpEveryMinutes != null ||
+      cfg.blindFactor != null
+    ) {
+      const bc = validateBlindConfig({
+        mode: cfg.blindUpMode != null ? cfg.blindUpMode : next.blindUpMode,
+        everyHands: cfg.blindUpEveryHands != null ? cfg.blindUpEveryHands : next.blindUpEveryHands,
+        everyMinutes: cfg.blindUpEveryMinutes != null ? cfg.blindUpEveryMinutes : next.blindUpEveryMinutes,
+        factor: cfg.blindFactor != null ? cfg.blindFactor : next.blindFactor,
+      });
+      next.blindUpMode = bc.mode;
+      next.blindUpEveryHands = bc.everyHands;
+      next.blindUpEveryMinutes = bc.everyMinutes;
+      next.blindFactor = bc.factor;
+    }
     if (next.bigBlind <= next.smallBlind) throw new Error('大盲必须大于小盲');
     if (next.startingChips < next.bigBlind * 10) throw new Error('初始筹码至少为大盲的 10 倍');
     this.config = next;
@@ -149,9 +183,21 @@ class Room {
     this.gameOver = false;
     this.result = null;
     this.handNo = 0;
+    this.completedHands = 0;
+    this.blindLevel = 1;
+    this.currentBlinds = {
+      smallBlind: this.config.smallBlind,
+      bigBlind: this.config.bigBlind,
+    };
+    this.gameStartedAt = this.now();
     const startIdx = crypto.randomInt(this.players.length);
     this.buttonSeat = this.players[startIdx].seat;
     this.pushLog('游戏开始！');
+    if (this.config.blindUpMode === 'hands') {
+      this.pushLog(`升盲模式：每 ${this.config.blindUpEveryHands} 手升一级（×${this.config.blindFactor}）`);
+    } else if (this.config.blindUpMode === 'time') {
+      this.pushLog(`升盲模式：每 ${this.config.blindUpEveryMinutes} 分钟升一级（×${this.config.blindFactor}）`);
+    }
     this._startHand(true);
   }
 
@@ -188,17 +234,20 @@ class Room {
       return;
     }
 
+    this._refreshBlinds();
     if (!first) this._advanceButton();
     this.handNo += 1;
     this.result = null;
     this.phase = 'playing';
+    if (this.hand) this.hand.destroy(); // 防御：旧手若还有定时器，一并清掉
     this.hand = new Hand({
       players: this.players.map((p) => ({ id: p.id, seat: p.seat, name: p.name, chips: p.chips })),
       buttonSeat: this.buttonSeat,
-      smallBlind: this.config.smallBlind,
-      bigBlind: this.config.bigBlind,
+      smallBlind: this.currentBlinds.smallBlind,
+      bigBlind: this.currentBlinds.bigBlind,
       handNo: this.handNo,
       actionTimeout: this.config.actionTimeout,
+      dealDelay: this._dealDelay,
       onUpdate: () => this.broadcast(),
       onEnd: (res) => this._onHandEnd(res),
       onEvent: (text) => this.pushLog(text),
@@ -214,6 +263,43 @@ class Room {
     logger.info(`[房间 ${this.code}] 第 ${this.handNo} 手开始，${this.players.length} 人`);
   }
 
+  // ---------- 升盲 ----------
+
+  // 当前应处的级数（hands 按已完成手数，time 按开局到现在的时间）
+  _currentLevel(now = this.now()) {
+    const c = this.config;
+    if (c.blindUpMode === 'hands') {
+      return levelForHands(this.completedHands, c.blindUpEveryHands);
+    }
+    if (c.blindUpMode === 'time') {
+      if (!this.gameStartedAt) return 1;
+      return levelForTime(now - this.gameStartedAt, c.blindUpEveryMinutes);
+    }
+    return 1;
+  }
+
+  // 某一级的盲注；第 1 级保留房间设置里的原始大小盲
+  _levelBlinds(level) {
+    const c = this.config;
+    if (level <= 1) return { smallBlind: c.smallBlind, bigBlind: c.bigBlind };
+    const b = blindsForLevel(c.smallBlind, c.blindFactor, level);
+    return { smallBlind: b.smallBlind, bigBlind: b.bigBlind };
+  }
+
+  // 在发下一手前调用：计算并应用当前级数，升级时写日志
+  _refreshBlinds(now = this.now()) {
+    const level = this._currentLevel(now);
+    const b = this._levelBlinds(level);
+    if (level > this.blindLevel) {
+      const up = level - this.blindLevel;
+      this.pushLog(
+        `盲注升级：${b.smallBlind} / ${b.bigBlind}（第 ${level} 级${up > 1 ? `，连升 ${up} 级` : ''}）`
+      );
+    }
+    this.blindLevel = level;
+    this.currentBlinds = b;
+  }
+
   _advanceButton() {
     const seats = this.players.map((p) => p.seat).sort((a, b) => a - b);
     if (!seats.length) return;
@@ -222,6 +308,7 @@ class Room {
   }
 
   _onHandEnd(result) {
+    this.completedHands += 1;
     // 把本手结束后的筹码同步回房间玩家
     if (this.hand) {
       for (const hp of this.hand.players) {

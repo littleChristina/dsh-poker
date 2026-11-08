@@ -115,7 +115,38 @@
                 <input id="cfg-timeout" class="input" type="number" min="5" max="120" step="5" />
               </label>
             </div>
-            <p class="settings-hint">大盲必须大于小盲；初始筹码至少为大盲的 10 倍。</p>
+
+            <div class="settings-sub">
+              <h4 class="settings-subtitle">升盲（可选）</h4>
+              <div class="settings-grid">
+                <label class="field">
+                  <span class="field-label">升盲模式</span>
+                  <select id="cfg-blind-mode" class="input select">
+                    <option value="off">关闭升盲</option>
+                    <option value="hands">按手数升盲</option>
+                    <option value="time">按时间升盲</option>
+                  </select>
+                </label>
+                <label id="cfg-hands-field" class="field" hidden>
+                  <span class="field-label">每几手升一级</span>
+                  <input id="cfg-blind-hands" class="input" type="number" min="1" max="50" step="1" />
+                </label>
+                <label id="cfg-minutes-field" class="field" hidden>
+                  <span class="field-label">每几分钟升一级</span>
+                  <input id="cfg-blind-minutes" class="input" type="number" min="1" max="120" step="1" />
+                </label>
+                <label class="field">
+                  <span class="field-label">升盲倍率</span>
+                  <select id="cfg-blind-factor" class="input select">
+                    <option value="1.25">1.25 倍</option>
+                    <option value="1.5">1.5 倍</option>
+                    <option value="2">2 倍</option>
+                  </select>
+                </label>
+              </div>
+              <p id="blind-preview" class="blind-preview"></p>
+            </div>
+            <p class="settings-hint">大盲必须大于小盲；初始筹码至少为大盲的 10 倍；升盲只会在下一手开始时生效。</p>
             <div class="settings-actions">
               <button id="btn-cancel-config" class="btn ghost" type="button">收起</button>
               <button id="btn-save-config" class="btn primary" type="button">保存设置</button>
@@ -127,6 +158,12 @@
         </div>
 
         <section id="table-panel" class="table-panel" hidden>
+          <div class="table-topbar">
+            <span id="table-handno" class="table-meta">第 1 手</span>
+            <span id="table-level" class="table-meta">盲注 10 / 20</span>
+            <span id="table-blind-progress" class="table-blind-progress"></span>
+            <button id="btn-chips-unit" class="btn ghost topbar-toggle" type="button" title="切换自己的筹码显示单位">筹码：数值</button>
+          </div>
           <div id="table-stage" class="table-stage">
             <div class="felt" aria-hidden="true"></div>
 
