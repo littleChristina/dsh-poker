@@ -14,6 +14,7 @@ const DEFAULT_CONFIG = {
   blindUpEveryHands: 10,
   blindUpEveryMinutes: 10,
   blindFactor: 1.5,
+  spectatorCards: false, // 观战者能否看到所有人的底牌
 };
 
 const NEXT_HAND_DELAY = 9000; // 结算展示（赢家最佳五张）时长
@@ -68,26 +69,39 @@ class Room {
     return null;
   }
 
+  seatedPlayers() {
+    return this.players.filter((p) => p.role !== 'spectator');
+  }
+
+  spectatorPlayers() {
+    return this.players.filter((p) => p.role === 'spectator');
+  }
+
   addPlayer(name) {
-    const seat = this.findSeat();
-    if (seat == null) throw new Error('房间已满');
     const clean = String(name || '').trim().slice(0, 12) || '玩家';
+    const spectator = this.phase !== 'waiting';
+    let seat = null;
+    if (!spectator) {
+      seat = this.findSeat();
+      if (seat == null) throw new Error('房间已满');
+    }
     const p = {
       id: randomId(),
       token: randomToken(),
       name: clean,
+      role: spectator ? 'spectator' : 'player',
       seat,
-      chips: this.config.startingChips,
+      chips: spectator ? 0 : this.config.startingChips,
       connected: true,
       ready: false,
       leaving: false,
       joinedAt: Date.now(),
     };
     this.players.push(p);
-    this.players.sort((a, b) => a.seat - b.seat);
+    this.players.sort((a, b) => (a.seat == null ? 99 : a.seat) - (b.seat == null ? 99 : b.seat));
     if (!this.hostId) this.hostId = p.id;
     this.lastActivity = Date.now();
-    this.pushLog(`${p.name} 加入了房间`);
+    this.pushLog(spectator ? `${p.name} 加入观战` : `${p.name} 加入了房间`);
     return p;
   }
 
@@ -107,7 +121,7 @@ class Room {
     this.lastActivity = Date.now();
     if (!val) {
       this.pushLog(`${p.name} 的连接断开了`);
-      if (this.phase === 'playing' && this.hand) this.hand.hurry(3000);
+      if (this.phase === 'playing' && this.hand && p.role !== 'spectator') this.hand.hurry(3000);
       else this.broadcast();
     } else {
       this.pushLog(`${p.name} 重新连接`);
@@ -118,6 +132,7 @@ class Room {
   setReady(playerId, val) {
     const p = this.findById(playerId);
     if (!p) throw new Error('玩家不存在');
+    if (p.role === 'spectator') throw new Error('观战中不能准备');
     if (this.phase !== 'waiting') throw new Error('牌局进行中');
     p.ready = !!val;
     this.lastActivity = Date.now();
@@ -139,6 +154,7 @@ class Room {
     if (cfg.bigBlind != null) next.bigBlind = num(cfg.bigBlind, 2, 200000, '大盲');
     if (cfg.startingChips != null) next.startingChips = num(cfg.startingChips, 100, 1000000, '初始筹码');
     if (cfg.actionTimeout != null) next.actionTimeout = num(cfg.actionTimeout, 5, 120, '思考时间');
+    if (cfg.spectatorCards != null) next.spectatorCards = !!cfg.spectatorCards;
     if (
       cfg.blindUpMode != null ||
       cfg.blindUpEveryHands != null ||
@@ -160,7 +176,9 @@ class Room {
     if (next.startingChips < next.bigBlind * 10) throw new Error('初始筹码至少为大盲的 10 倍');
     this.config = next;
     for (const p of this.players) {
-      if (this.phase === 'waiting' && !this.gameOver) p.chips = next.startingChips;
+      if (this.phase === 'waiting' && !this.gameOver && p.role !== 'spectator') {
+        p.chips = next.startingChips;
+      }
     }
     this.lastActivity = Date.now();
     this.broadcast();
@@ -171,14 +189,19 @@ class Room {
   start(playerId) {
     if (playerId !== this.hostId) throw new Error('只有房主可以开始游戏');
     if (this.phase !== 'waiting') throw new Error('牌局已经开始了');
-    if (this.players.length < 2) throw new Error('至少需要 2 名玩家');
-    for (const p of this.players) {
+    const seated = this.seatedPlayers();
+    if (seated.length < 2) throw new Error('至少需要 2 名玩家');
+    for (const p of seated) {
       if (p.id !== this.hostId && !p.ready) throw new Error(`${p.name} 还没有准备`);
     }
-    for (const p of this.players) {
+    for (const p of seated) {
       p.chips = this.config.startingChips;
       p.ready = false;
       p.leaving = false;
+    }
+    for (const p of this.spectatorPlayers()) {
+      p.chips = 0;
+      p.ready = false;
     }
     this.gameOver = false;
     this.result = null;
@@ -190,8 +213,8 @@ class Room {
       bigBlind: this.config.bigBlind,
     };
     this.gameStartedAt = this.now();
-    const startIdx = crypto.randomInt(this.players.length);
-    this.buttonSeat = this.players[startIdx].seat;
+    const startIdx = crypto.randomInt(seated.length);
+    this.buttonSeat = seated[startIdx].seat;
     this.pushLog('游戏开始！');
     if (this.config.blindUpMode === 'hands') {
       this.pushLog(`升盲模式：每 ${this.config.blindUpEveryHands} 手升一级（×${this.config.blindFactor}）`);
@@ -206,29 +229,37 @@ class Room {
     this._nextTimer = null;
     this.nextHandAt = null;
 
-    // 移除中途离开和筹码耗尽的玩家
-    const before = this.players.length;
-    this.players = this.players.filter((p) => {
+    // 移除中途离开的玩家；筹码耗尽的玩家转为观战
+    const kept = [];
+    for (const p of this.players) {
       if (p.leaving) {
         this.pushLog(`${p.name} 离开了牌桌`);
-        return false;
+        continue;
       }
-      if (p.chips <= 0) {
-        this.pushLog(`${p.name} 筹码耗尽，离开牌桌`);
-        return false;
+      if (p.role !== 'spectator' && p.chips <= 0) {
+        p.role = 'spectator';
+        p.seat = null;
+        p.chips = 0;
+        p.ready = false;
+        this.pushLog(`${p.name} 筹码耗尽，转为观战`);
       }
-      return true;
-    });
-    if (this.players.length !== before && !this.findById(this.hostId)) {
-      this.hostId = this.players.length ? this.players[0].id : null;
+      kept.push(p);
+    }
+    this.players = kept;
+    this.players.sort((a, b) => (a.seat == null ? 99 : a.seat) - (b.seat == null ? 99 : b.seat));
+    if (!this.findById(this.hostId)) {
+      const nextHost = this.seatedPlayers()[0] || this.players[0];
+      this.hostId = nextHost ? nextHost.id : null;
       if (this.hostId) this.pushLog(`${this.findById(this.hostId).name} 成为新房主`);
     }
 
-    if (this.players.length < 2) {
+    const seated = this.seatedPlayers();
+    if (seated.length < 2) {
       this.phase = 'waiting';
       this.gameOver = true;
       this.hand = null;
       this.result = null;
+      this._restoreSpectators();
       this.pushLog('人数不足，牌局结束');
       this.broadcast();
       return;
@@ -241,7 +272,7 @@ class Room {
     this.phase = 'playing';
     if (this.hand) this.hand.destroy(); // 防御：旧手若还有定时器，一并清掉
     this.hand = new Hand({
-      players: this.players.map((p) => ({ id: p.id, seat: p.seat, name: p.name, chips: p.chips })),
+      players: seated.map((p) => ({ id: p.id, seat: p.seat, name: p.name, chips: p.chips })),
       buttonSeat: this.buttonSeat,
       smallBlind: this.currentBlinds.smallBlind,
       bigBlind: this.currentBlinds.bigBlind,
@@ -260,7 +291,7 @@ class Room {
     this.pushLog(`—— 第 ${this.handNo} 手开始 ——`);
     this.hand.start();
     this.broadcast();
-    logger.info(`[房间 ${this.code}] 第 ${this.handNo} 手开始，${this.players.length} 人`);
+    logger.info(`[房间 ${this.code}] 第 ${this.handNo} 手开始，${seated.length} 人`);
   }
 
   // ---------- 升盲 ----------
@@ -301,7 +332,7 @@ class Room {
   }
 
   _advanceButton() {
-    const seats = this.players.map((p) => p.seat).sort((a, b) => a - b);
+    const seats = this.seatedPlayers().map((p) => p.seat).sort((a, b) => a - b);
     if (!seats.length) return;
     const next = seats.find((s) => s > this.buttonSeat);
     this.buttonSeat = next == null ? seats[0] : next;
@@ -320,12 +351,25 @@ class Room {
     this.phase = 'handover';
     this.pushLog('—— 本手结束 ——');
 
-    const alive = this.players.filter((p) => !p.leaving && p.chips > 0);
+    // 筹码耗尽的玩家就地转为观战，等牌局结束再决定是否回来
+    for (const p of this.seatedPlayers()) {
+      if (p.chips <= 0) {
+        p.role = 'spectator';
+        p.seat = null;
+        p.chips = 0;
+        p.ready = false;
+        this.pushLog(`${p.name} 筹码耗尽，转为观战`);
+      }
+    }
+    this.players.sort((a, b) => (a.seat == null ? 99 : a.seat) - (b.seat == null ? 99 : b.seat));
+
+    const alive = this.seatedPlayers().filter((p) => !p.leaving && p.chips > 0);
     if (alive.length < 2) {
       this.gameOver = true;
       this.phase = 'waiting';
       this.nextHandAt = null;
       this.pushLog('牌局结束，回到等待区');
+      this._restoreSpectators();
       this.broadcast();
       return;
     }
@@ -337,9 +381,28 @@ class Room {
     }, NEXT_HAND_DELAY);
   }
 
+  // 一局结束回到等待区：把观战者重新安排到空座，筹码恢复初始值（A 方案）
+  _restoreSpectators() {
+    const specs = this.spectatorPlayers();
+    if (!specs.length) return;
+    for (const p of specs) {
+      const seat = this.findSeat();
+      if (seat == null) break;
+      p.role = 'player';
+      p.seat = seat;
+      p.chips = this.config.startingChips;
+      p.ready = false;
+      p.leaving = false;
+      this.pushLog(`${p.name} 回到牌桌，筹码重置为 ${this.config.startingChips}`);
+    }
+    this.players.sort((a, b) => (a.seat == null ? 99 : a.seat) - (b.seat == null ? 99 : b.seat));
+  }
+
   // ---------- 操作 ----------
 
   act(playerId, action, amount) {
+    const p = this.findById(playerId);
+    if (p && p.role === 'spectator') throw new Error('观战中不能行动');
     if (this.phase !== 'playing' || !this.hand) throw new Error('现在没有进行中的牌局');
     this.hand.act(playerId, action, amount);
     this.lastActivity = Date.now();
@@ -349,6 +412,18 @@ class Room {
     const p = this.findById(playerId);
     if (!p) return;
     this.lastActivity = Date.now();
+    if (p.role === 'spectator') {
+      this.pushLog(`${p.name} 离开了观战`);
+      this.hub.event(this, 'left', { playerId });
+      this.players = this.players.filter((x) => x.id !== playerId);
+      if (this.hostId === playerId) {
+        const nextHost = this.seatedPlayers()[0] || this.players[0];
+        this.hostId = nextHost ? nextHost.id : null;
+        if (this.hostId) this.pushLog(`${this.findById(this.hostId).name} 成为新房主`);
+      }
+      this.broadcast();
+      return;
+    }
     if (this.phase === 'playing' && this.hand) {
       p.leaving = true;
       p.connected = false;
@@ -359,7 +434,8 @@ class Room {
       this.hub.event(this, 'left', { playerId });
       this.players = this.players.filter((x) => x.id !== playerId);
       if (this.hostId === playerId) {
-        this.hostId = this.players.length ? this.players[0].id : null;
+        const nextHost = this.seatedPlayers()[0] || this.players[0];
+        this.hostId = nextHost ? nextHost.id : null;
         if (this.hostId) this.pushLog(`${this.findById(this.hostId).name} 成为新房主`);
       }
       this.broadcast();

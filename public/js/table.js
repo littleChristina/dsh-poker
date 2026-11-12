@@ -21,6 +21,7 @@ const els = {
   handno: $('#table-handno'),
   level: $('#table-level'),
   blindProgress: $('#table-blind-progress'),
+  watch: $('#table-watch'),
   chipsUnit: $('#btn-chips-unit'),
   result: $('#hand-result'),
   bar: $('#action-bar'),
@@ -36,6 +37,13 @@ const els = {
   raiseValue: $('#raise-value'),
   raiseCancel: $('#btn-raise-cancel'),
   raiseConfirm: $('#btn-raise-confirm'),
+  rail: $('#raise-rail'),
+  railSlider: $('#rail-slider'),
+  railValue: $('#rail-value'),
+  railMin: $('#rail-min'),
+  railMax: $('#rail-max'),
+  railConfirm: $('#rail-confirm'),
+  railCancel: $('#rail-cancel'),
 };
 
 const seatNodes = new Map(); // playerId -> { root, cards, avatar, bet, name, chips, tags, action }
@@ -47,6 +55,7 @@ let heroSeat = 0;
 let submitting = false;
 let ticker = null;
 let resultTimerEl = null;
+let activeSlider = null; // 当前生效的加注滑块：桌面竖轨或底部横条
 let bestByWinner = new Map(); // 每位赢家自己的最佳五张（用于高亮其底牌）
 let boardBest = new Set(); // 公共牌中参与赢家组合的牌
 let chipsUnit = loadChipsUnit(); // 'chips' 数值 | 'bb' 大盲倍数（只影响自己的筹码显示）
@@ -101,9 +110,12 @@ function rule(text, extra = '') {
 function seatPosition(seat) {
   const idx = (seat - heroSeat + SEAT_COUNT) % SEAT_COUNT;
   const angle = ((90 + idx * 45) * Math.PI) / 180;
+  // 牌桌被压矮时把纵向椭圆再拉开一点，给中央公共牌留出空间
+  const stageH = els.stage ? els.stage.clientHeight : 0;
+  const ry = stageH && stageH < 520 ? 34 : 31;
   return {
     x: 50 + 36.5 * Math.cos(angle),
-    y: 52 + 31 * Math.sin(angle),
+    y: 52 + ry * Math.sin(angle),
   };
 }
 
@@ -117,6 +129,9 @@ export function initTable() {
   els.raiseCancel.addEventListener('click', closeRaise);
   els.raiseConfirm.addEventListener('click', confirmRaise);
   els.slider.addEventListener('input', updateRaiseLabel);
+  els.railSlider.addEventListener('input', updateRaiseLabel);
+  els.railConfirm.addEventListener('click', confirmRaise);
+  els.railCancel.addEventListener('click', closeRaise);
 
   els.chipsUnit.addEventListener('click', () => {
     chipsUnit = chipsUnit === 'bb' ? 'chips' : 'bb';
@@ -125,6 +140,23 @@ export function initTable() {
   });
 
   if (!ticker) ticker = setInterval(tick, 250);
+
+  // 跨过 700px 断点时收掉当前加注面板，避免竖轨/横条布局错位
+  const railQuery = window.matchMedia('(min-width: 900px)');
+  const onLayoutChange = () => {
+    if (activeSlider) closeRaise();
+  };
+  if (railQuery.addEventListener) railQuery.addEventListener('change', onLayoutChange);
+  else railQuery.addListener(onLayoutChange);
+
+  // 牌桌高度变化时重算座位位置（短屏会把纵向椭圆拉开一点）
+  let resizeTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      if (last) renderSeats(last);
+    }, 120);
+  });
 }
 
 // ---------- 主渲染 ----------
@@ -133,7 +165,7 @@ export function renderTable(state) {
   last = state;
   receivedAt = Date.now();
   clockOffset = (state.serverTime || Date.now()) - Date.now();
-  heroSeat = state.you ? state.you.seat : 0;
+  heroSeat = state.you && state.you.seat != null ? state.you.seat : 0;
 
   const winning = winningCards(state);
   bestByWinner = winning.byWinner;
@@ -156,6 +188,12 @@ function renderTopbar(state) {
   els.blindProgress.classList.toggle('is-muted', !bu.mode || bu.mode === 'off');
   els.chipsUnit.textContent = chipUnitLabel();
   els.chipsUnit.setAttribute('aria-pressed', chipsUnit === 'bb' ? 'true' : 'false');
+
+  const watching = !!(state.you && state.you.role === 'spectator');
+  els.watch.hidden = !watching;
+  if (watching) {
+    els.watch.textContent = state.spectatorCards ? '观战中 · 手牌可见' : '观战中 · 手牌不可见';
+  }
 }
 
 function blindProgressText(state) {
@@ -319,6 +357,11 @@ function winningCards(state) {
 // ---------- 行动条 ----------
 
 function renderActionBar(state) {
+  if (state.you && state.you.role === 'spectator') {
+    els.bar.hidden = true;
+    closeRaise();
+    return;
+  }
   const playing = state.phase === 'playing';
   els.bar.hidden = !(playing || state.phase === 'handover');
 
@@ -336,9 +379,9 @@ function renderActionBar(state) {
   const mine = !!(me && legal && state.actorId === me.id);
 
   els.bar.classList.toggle('is-mine', mine);
-  closeRaise();
 
   if (!mine) {
+    closeRaise();
     els.buttons.hidden = true;
     const actor = (state.players || []).find((p) => p.id === state.actorId);
     els.status.textContent = actor ? `等待 ${actor.name} 行动` : '等待发牌…';
@@ -363,10 +406,25 @@ function renderActionBar(state) {
     els.raise.textContent = r.allInOnly ? `全下 ${fmtChips(r.max, state)}` : '加注';
     els.raise.dataset.min = String(r.min);
     els.raise.dataset.max = String(r.max);
+
+    if (isRailLayout()) {
+      // 桌面端：竖轨在轮到自己时自动出现，不用先点“加注”
+      els.raise.hidden = true;
+      if (els.rail.hidden) openRaise();
+    } else {
+      els.rail.hidden = true;
+      els.raise.hidden = false;
+    }
+  } else {
+    els.rail.hidden = true;
   }
 }
 
 // ---------- 加注滑块 ----------
+
+function isRailLayout() {
+  return window.matchMedia('(min-width: 900px)').matches;
+}
 
 function openRaise() {
   const legal = last && last.you ? last.you.legal : null;
@@ -377,40 +435,54 @@ function openRaise() {
   let step = cfg.bigBlind || 10;
   if (max - min < step) step = 1;
 
-  els.slider.min = String(min);
-  els.slider.max = String(max);
-  els.slider.step = String(step);
-  els.slider.value = String(allInOnly ? max : min);
-  els.slider.disabled = min >= max;
+  const slider = isRailLayout() ? els.railSlider : els.slider;
+  slider.min = String(min);
+  slider.max = String(max);
+  slider.step = String(step);
+  slider.value = String(allInOnly ? max : min);
+  slider.disabled = min >= max;
+  activeSlider = slider;
 
-  els.raiseRow.hidden = false;
+  if (slider === els.railSlider) {
+    els.railMax.textContent = `全下 ${fmtChips(max, last)}`;
+    els.railMin.textContent = `最小 ${fmtChips(min, last)}`;
+    els.rail.hidden = false;
+    els.raiseRow.hidden = true;
+  } else {
+    els.rail.hidden = true;
+    els.raiseRow.hidden = false;
+  }
+
   els.raise.hidden = true;
   updateRaiseLabel();
 }
 
 function closeRaise() {
+  activeSlider = null;
   els.raiseRow.hidden = true;
+  els.rail.hidden = true;
   els.raise.hidden = false;
 }
 
 function updateRaiseLabel() {
   const legal = last && last.you ? last.you.legal : null;
-  if (!legal || !legal.raise) return;
+  if (!legal || !legal.raise || !activeSlider) return;
   const { min, max } = legal.raise;
-  const value = Math.max(min, Math.min(max, Math.round(Number(els.slider.value))));
+  const value = Math.max(min, Math.min(max, Math.round(Number(activeSlider.value))));
   const text = value >= max ? `全下 ${fmtChips(max, last)}` : `加注到 ${fmtChips(value, last)}`;
   els.raiseValue.textContent = text;
   els.raiseConfirm.textContent = text;
+  els.railValue.textContent = text;
 }
 
 function confirmRaise() {
   const legal = last && last.you ? last.you.legal : null;
-  if (!legal || !legal.raise) {
+  if (!legal || !legal.raise || !activeSlider) {
     closeRaise();
     return;
   }
   const { min, max } = legal.raise;
-  const value = Math.max(min, Math.min(max, Math.round(Number(els.slider.value))));
+  const value = Math.max(min, Math.min(max, Math.round(Number(activeSlider.value))));
   closeRaise();
   send('raise', value);
 }
@@ -435,7 +507,7 @@ async function send(action, amount) {
 }
 
 function setButtonsDisabled(disabled) {
-  for (const btn of [els.fold, els.check, els.call, els.raise, els.raiseConfirm]) {
+  for (const btn of [els.fold, els.check, els.call, els.raise, els.raiseConfirm, els.railConfirm]) {
     btn.disabled = disabled;
   }
 }

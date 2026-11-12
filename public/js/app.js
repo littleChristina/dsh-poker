@@ -18,8 +18,10 @@ const els = {
   btnCreate: $('#btn-create'),
   btnJoin: $('#btn-join'),
   lobbyError: $('#lobby-error'),
+  createSpectatorCards: $('#create-spectator-cards'),
   lanAddr: $('#lan-addr'),
   // 房间
+  screenRoom: $('#screen-room'),
   roomCodeBox: $('#room-code-box'),
   roomCode: $('#room-code'),
   roomTitle: $('#room-title'),
@@ -50,6 +52,7 @@ const els = {
   cfgHandsField: $('#cfg-hands-field'),
   cfgMinutesField: $('#cfg-minutes-field'),
   blindPreview: $('#blind-preview'),
+  cfgSpectatorCards: $('#cfg-spectator-cards'),
   btnSaveConfig: $('#btn-save-config'),
   btnCancelConfig: $('#btn-cancel-config'),
   settingsError: $('#settings-error'),
@@ -117,7 +120,7 @@ async function createRoom() {
   if (!name) return;
   setBusy(true);
   try {
-    const res = await api.create(name);
+    const res = await api.create(name, els.createSpectatorCards.checked);
     enterRoom(res);
     toast(`房间 ${res.code} 创建成功，把房间码发给朋友吧`);
   } catch (err) {
@@ -302,6 +305,7 @@ function openSettings() {
   els.cfgBlindHands.value = cfg.blindUpEveryHands || 10;
   els.cfgBlindMinutes.value = cfg.blindUpEveryMinutes || 10;
   els.cfgBlindFactor.value = String(cfg.blindFactor || 1.5);
+  els.cfgSpectatorCards.checked = !!cfg.spectatorCards;
   els.settingsError.hidden = true;
   els.settingsPanel.hidden = false;
   syncBlindFields();
@@ -319,6 +323,7 @@ async function saveConfig() {
     blindUpEveryHands: Number(els.cfgBlindHands.value),
     blindUpEveryMinutes: Number(els.cfgBlindMinutes.value),
     blindFactor: Number(els.cfgBlindFactor.value),
+    spectatorCards: els.cfgSpectatorCards.checked,
   };
   els.btnSaveConfig.disabled = true;
   try {
@@ -356,7 +361,10 @@ function fmtNumber(n) {
 function renderRoom(state) {
   const players = (state.players || []).filter((p) => p && !p.empty);
   els.roomCode.textContent = state.code || store.get().code || '----';
-  els.roomCount.textContent = `${players.length} / 8`;
+  const spectators = state.spectators || [];
+  els.roomCount.textContent = spectators.length
+    ? `${players.length} / 8 · 观战 ${spectators.length}`
+    : `${players.length} / 8`;
 
   const cfg = state.config || {};
   const blinds = state.blinds || { level: 1, smallBlind: cfg.smallBlind, bigBlind: cfg.bigBlind };
@@ -389,6 +397,7 @@ function renderRoom(state) {
   }
 
   const inGame = state.phase === 'playing' || state.phase === 'handover';
+  els.screenRoom.classList.toggle('is-playing', inGame);
   els.waitingPanel.hidden = inGame;
   els.tablePanel.hidden = !inGame;
   if (inGame) renderTable(state);
@@ -409,6 +418,10 @@ function renderActions(state) {
 
   const players = (state.players || []).filter((p) => p && !p.empty && !p.leaving);
   const isHost = !!(state.you && state.you.isHost);
+  if (state.you && state.you.role === 'spectator') {
+    els.waitingActions.hidden = true;
+    return;
+  }
   const others = players.filter((p) => p.id !== state.hostId);
   const readyCount = others.filter((p) => p.ready).length;
 

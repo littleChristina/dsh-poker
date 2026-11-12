@@ -12,6 +12,10 @@ function publicState(room, playerId) {
   const winnings = result && result.winnings ? result.winnings : {};
   const refunds = result && result.refunds ? result.refunds : {};
 
+  const me = room.findById(playerId);
+  const isSpectator = !!(me && me.role === 'spectator');
+  const seeAllCards = isSpectator && room.config.spectatorCards === true;
+
   const seats = [];
   for (let s = 0; s < SEATS; s++) {
     const player = room.players.find((p) => p.seat === s);
@@ -44,7 +48,7 @@ function publicState(room, playerId) {
       cards: null,
       handName: null,
     };
-    if (player.id === playerId && hp) entry.cards = hp.cards.slice();
+    if (hp && (player.id === playerId || seeAllCards)) entry.cards = hp.cards.slice();
     if (reveal) {
       entry.cards = reveal.cards.slice();
       entry.handName = reveal.handName;
@@ -52,12 +56,21 @@ function publicState(room, playerId) {
     seats.push(entry);
   }
 
-  const me = room.findById(playerId);
   const myHandPlayer = me ? handPlayers.get(me.id) : null;
   let legal = null;
-  if (hand && !hand.done && hand.actor && hand.actor.id === playerId) {
+  if (!isSpectator && hand && !hand.done && hand.actor && hand.actor.id === playerId) {
     legal = hand.legalFor(playerId);
   }
+
+  const spectators = room.players
+    .filter((p) => p.role === 'spectator')
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      connected: p.connected,
+      isHost: p.id === room.hostId,
+      isYou: p.id === playerId,
+    }));
 
   // 升盲：当前生效级别 + 下一手将生效的盲注 + 升级进度
   const blindUpMode = room.config.blindUpMode;
@@ -107,10 +120,13 @@ function publicState(room, playerId) {
     nextHandIn: room.nextHandAt ? Math.max(0, room.nextHandAt - now) : null,
     gameOver: room.gameOver,
     result,
+    spectatorCards: room.config.spectatorCards === true,
+    spectators,
     you: me
       ? {
           id: me.id,
           name: me.name,
+          role: me.role || 'player',
           seat: me.seat,
           chips: myHandPlayer ? myHandPlayer.chips : me.chips,
           cards: myHandPlayer ? myHandPlayer.cards.slice() : null,

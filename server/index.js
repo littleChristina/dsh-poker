@@ -84,6 +84,7 @@ const api = {
   async create(req, res) {
     const body = await readBody(req);
     const room = rooms.create();
+    room.config.spectatorCards = !!body.spectatorCards;
     const player = room.addPlayer(body.name);
     logger.info(`玩家 ${player.name} 创建房间 ${room.code}`);
     sendJson(res, 200, {
@@ -98,7 +99,10 @@ const api = {
     const body = await readBody(req);
     const room = rooms.get(body.code);
     if (!room) return sendJson(res, 404, { error: '房间不存在，请检查房间码' });
-    if (room.players.length >= 8) return sendJson(res, 400, { error: '房间已满' });
+    const seated = room.seatedPlayers ? room.seatedPlayers() : room.players;
+    if (room.phase === 'waiting' && seated.length >= 8) {
+      return sendJson(res, 400, { error: '房间已满' });
+    }
     if (room.findByToken(body.token)) return sendJson(res, 400, { error: '你已经在房间里了' });
     const player = room.addPlayer(body.name);
     sendJson(res, 200, {
@@ -182,7 +186,8 @@ function serveStatic(req, res, pathname) {
     const ext = path.extname(filePath).toLowerCase();
     res.writeHead(200, {
       'Content-Type': MIME[ext] || 'application/octet-stream',
-      'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=60',
+      // 前端迭代频繁：一律走协商缓存，避免朋友拿到旧 JS/CSS
+      'Cache-Control': 'no-cache',
       'Content-Length': st.size,
     });
     fs.createReadStream(filePath).pipe(res);

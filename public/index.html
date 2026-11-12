@@ -36,6 +36,10 @@
 
         <div class="tab-body" data-tab-body="create">
           <p class="hint">开一桌，把房间码发给朋友，等他们进来。</p>
+          <label class="check-row">
+            <input id="create-spectator-cards" type="checkbox" />
+            <span>观战人可见底牌（默认关闭）</span>
+          </label>
           <button id="btn-create" class="btn primary block">创建房间</button>
         </div>
 
@@ -147,6 +151,10 @@
               <p id="blind-preview" class="blind-preview"></p>
             </div>
             <p class="settings-hint">大盲必须大于小盲；初始筹码至少为大盲的 10 倍；升盲只会在下一手开始时生效。</p>
+            <label class="check-row">
+              <input id="cfg-spectator-cards" type="checkbox" />
+              <span>观战人可见底牌（关闭时观战者只看公共牌）</span>
+            </label>
             <div class="settings-actions">
               <button id="btn-cancel-config" class="btn ghost" type="button">收起</button>
               <button id="btn-save-config" class="btn primary" type="button">保存设置</button>
@@ -162,6 +170,7 @@
             <span id="table-handno" class="table-meta">第 1 手</span>
             <span id="table-level" class="table-meta">盲注 10 / 20</span>
             <span id="table-blind-progress" class="table-blind-progress"></span>
+            <span id="table-watch" class="table-watch" hidden></span>
             <button id="btn-chips-unit" class="btn ghost topbar-toggle" type="button" title="切换自己的筹码显示单位">筹码：数值</button>
           </div>
           <div id="table-stage" class="table-stage">
@@ -201,6 +210,19 @@
       </main>
     </div>
   </section>
+
+  <div id="raise-rail" class="raise-rail" hidden>
+    <span class="raise-rail-title">加注</span>
+    <span id="rail-max" class="raise-rail-max">全下 0</span>
+    <input id="rail-slider" class="rail-slider" type="range" min="0" max="0" value="0" step="1"
+      aria-label="上下拖动调整加注额" />
+    <span id="rail-value" class="raise-rail-value">加注到 0</span>
+    <span id="rail-min" class="raise-rail-min">最小 0</span>
+    <div class="raise-rail-buttons">
+      <button id="rail-confirm" class="btn primary" type="button">确认</button>
+      <button id="rail-cancel" class="btn ghost" type="button">取消</button>
+    </div>
+  </div>
 
 </div>
 

@@ -33,7 +33,7 @@ function post(path, body) {
 }
 
 export const api = {
-  create: (name) => post('/api/create', { name }),
+  create: (name, spectatorCards = false) => post('/api/create', { name, spectatorCards }),
   join: (code, name) => post('/api/join', { code, name }),
   rejoin: (token) => post('/api/rejoin', { token }),
   ready: (token, ready) => post('/api/ready', { token, ready }),
